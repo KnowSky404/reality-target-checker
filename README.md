@@ -124,6 +124,8 @@ RTC_SHA256='<替换为已审阅的 v0.1.0 脚本的 64 位 SHA256>' \
 
 ## 开发与发布
 
+所有变更必须在独立 worktree 中开发，每次推送或提交 PR 前先完成本地 `/review` 并解决问题；PR 经 Codex 机器人 review 且所需检查通过后，使用 Rebase and merge 合并并清理任务分支与 worktree。完整约束见 [AGENTS.md](AGENTS.md)。
+
 开发依赖：ShellCheck、shfmt、Bats ≥ 1.5、Python 3（标准库）、jq 和运行依赖。Ubuntu / Debian：
 
 ```bash
