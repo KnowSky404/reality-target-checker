@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Deterministic network boundary mocks. Certificate parsing uses real OpenSSL.
+set -u
+tool=${0##*/}
+has() { [[ ,${MOCK_CASE:-}, == *",$1,"* ]]; }
+if [[ -n ${MOCK_LOG:-} ]]; then
+  {
+    printf '%s ' "$tool"
+    printf '%q ' "$@"
+    printf '\n'
+  } >>"$MOCK_LOG"
+fi
+case $tool in
+  timeout)
+    shift 3
+    if [[ $1 == bash ]]; then
+      if has tcp_timeout; then exit 124; fi
+      if has tcp_refused || { has second_ip_fail && [[ ${!#} == 192.0.2.11 ]]; }; then
+        printf 'Connection refused\n' >&2
+        exit 1
+      fi
+      exit 0
+    fi
+    exec "$@"
+    ;;
+  dig)
+    type=${!#}
+    args=("$@")
+    name=${args[${#args[@]} - 2]%.}
+    if has dns_timeout && [[ $name == example.test ]]; then exit 9; fi
+    if { has aaaa_timeout && [[ $type == AAAA ]]; } || { has asn_timeout && [[ $type == TXT ]]; }; then exit 9; fi
+    if has nxdomain && [[ $name == example.test ]]; then
+      printf ';; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 1\n'
+      exit 0
+    fi
+    printf ';; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1\n'
+    if [[ $type == TXT ]]; then
+      asn=64500
+      prefix=192.0.2.0/24
+      if [[ $name == *.origin6.asn.cymru.com ]]; then prefix=2001:db8::/32; fi
+      if has cdn; then asn=13335; fi
+      if has different_asn && [[ $name == 20.2.0.192.origin.asn.cymru.com ]]; then asn=64501; fi
+      if [[ $name == AS*.asn.cymru.com ]]; then
+        printf '%s. 60 IN TXT "%s | ZZ | test | 2026-01-01 | Test Network"\n' "$name" "${name#AS}" | sed 's/\.asn.cymru.com |/ |/'
+      elif has moas; then
+        printf '%s. 60 IN TXT "64500 64501 | 192.0.2.0/24 | ZZ | test | 2026-01-01"\n' "$name"
+      elif has malformed_asn; then
+        printf '%s. 60 IN TXT "64500 | bad-prefix"\n' "$name"
+      else
+        printf '%s. 60 IN TXT "%s | %s | ZZ | test | 2026-01-01"\n' "$name" "$asn" "$prefix"
+      fi
+    elif [[ $type == A ]]; then
+      if ! has nodata; then printf '%s. 60 IN A 192.0.2.10\n' "$name"; fi
+      if has second_ip_fail; then printf '%s. 60 IN A 192.0.2.11\n' "$name"; fi
+      if has duplicate; then printf '%s. 60 IN A 192.0.2.10\n' "$name"; fi
+      if has too_many; then for ((i = 11; i <= 30; i++)); do printf '%s. 60 IN A 192.0.2.%s\n' "$name" "$i"; done; fi
+      if has bad_dns; then printf '%s. 60 IN A bad-ip\n' "$name"; fi
+    elif [[ $type == AAAA ]]; then
+      if ! has nodata; then printf '%s. 60 IN AAAA 2001:db8::10\n' "$name"; fi
+    elif [[ $type == CNAME ]] && has cname; then
+      printf '%s. 60 IN CNAME example.cloudfront.net.\n' "$name"
+    fi
+    ;;
+  openssl)
+    if [[ $1 == s_client ]]; then
+      if [[ $2 == -help ]]; then
+        if has old_openssl; then printf '%s\n' '-connect -servername'; else printf '%s\n' '-tls1_3 -alpn -groups'; fi
+        exit 0
+      fi
+      if has tls_timeout; then exit 124; fi
+      if has tls12; then
+        printf 'error:tlsv1 alert protocol version\n'
+        exit 1
+      fi
+      if has tls_ambiguous; then
+        printf 'New, TLSv1.3, Cipher is (NONE)\nVerify return code: 0 (ok)\n'
+        exit 1
+      fi
+      if [[ " $* " == *' -groups X25519 '* ]] && has x25519_fail; then
+        printf 'alert handshake failure\n'
+        exit 1
+      fi
+      cat "$MOCK_CERT"
+      printf 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384\n'
+      if has no_h2; then printf 'ALPN protocol: http/1.1\n'; elif ! has unknown_alpn; then printf 'ALPN protocol: h2\n'; fi
+      if has force_x25519 || has x25519_fail; then
+        if [[ " $* " == *' -groups X25519 '* ]]; then printf 'Server Temp Key: X25519, 253 bits\n'; else printf 'Peer Temp Key: prime256v1, 256 bits\n'; fi
+      elif ! has unknown_key; then printf 'Server Temp Key: X25519, 253 bits\n'; fi
+      if has bad_chain; then printf 'Verify return code: 20 (unable to get local issuer certificate)\n'; else printf 'Verify return code: 0 (ok)\n'; fi
+      if has eof_after_handshake; then exit 1; fi
+      exit 0
+    elif [[ $1 == x509 && " $* " == *' -dates '* ]]; then
+      if has expired; then
+        printf 'notBefore=Jan 1 00:00:00 2000 GMT\nnotAfter=Jan 1 00:00:00 2001 GMT\n'
+        exit 0
+      fi
+      if has future; then
+        printf 'notBefore=Jan 1 00:00:00 2099 GMT\nnotAfter=Jan 1 00:00:00 2100 GMT\n'
+        exit 0
+      fi
+      if has expiring; then
+        printf 'notBefore=Jan 1 00:00:00 2000 GMT\nnotAfter=%s\n' "$(date -u -d '+2 days' '+%b %e %T %Y GMT')"
+        exit 0
+      fi
+    elif [[ $1 == x509 && " $* " == *' -ext subjectAltName '* ]] && has cn_only; then
+      printf 'No extensions in certificate\n'
+      exit 0
+    fi
+    exec /usr/bin/openssl "$@"
+    ;;
+  curl)
+    if [[ " $* " == *' --version '* ]]; then
+      printf 'curl mock\nFeatures: SSL HTTP2\n'
+      exit 0
+    fi
+    out='' headers='' resolve=''
+    while (($#)); do
+      case $1 in
+        --output)
+          out=$2
+          shift 2
+          ;;
+        --dump-header)
+          headers=$2
+          shift 2
+          ;;
+        --resolve)
+          resolve=$2
+          shift 2
+          ;;
+        *)
+          url=$1
+          shift
+          ;;
+      esac
+    done
+    if [[ -n ${MOCK_DOWNLOAD_DIR:-} && $url == https://github.com/* ]]; then
+      cp "$MOCK_DOWNLOAD_DIR/${url##*/}" "$out"
+      exit $?
+    fi
+    if has http_timeout; then exit 28; fi
+    if has http_error; then exit 35; fi
+    code=200
+    if has http403; then code=403; fi
+    if has http405; then code=405; fi
+    if has redirect; then code=301; fi
+    printf 'HTTP/2 %s\r\n' "$code" >"$headers"
+    if has redirect; then printf 'LoCaTiOn: https://elsewhere.test/\r\n' >>"$headers"; fi
+    remote=${resolve#*:443:}
+    remote=${remote#[}
+    remote=${remote%]}
+    if has wrong_remote; then remote=192.0.2.99; fi
+    printf '%s 2 %s' "$code" "$remote"
+    ;;
+esac

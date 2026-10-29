@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install development tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck shfmt bats jq dnsutils openssl curl python3
+      - run: bash scripts/check.sh
+      - name: Validate stable SemVer and package
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/package-release.sh "$RELEASE_TAG"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Package and publish immutable-version assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          bash scripts/package-release.sh "$RELEASE_TAG"
+          printf 'Standalone Bash checker and SHA256SUMS. See docs/integration.md at this tag.\nCommit: %s\n' "$GITHUB_SHA" > dist/NOTES.md
+          gh release create "$RELEASE_TAG" dist/reality-target-checker.sh dist/SHA256SUMS dist/LICENSE \
+            --verify-tag --title "$RELEASE_TAG" --notes-file dist/NOTES.md

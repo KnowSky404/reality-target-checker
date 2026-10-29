@@ -1,0 +1,149 @@
+# reality-target-checker
+
+轻量、独立的 Bash CLI，用于评估域名是否适合作为 VLESS + REALITY 的候选握手目标（Target / SNI）。面向 sing-box、Xray-core 等实现的使用场景，不依赖任何代理内核。
+
+首版目标版本为 **v0.1.0**。当前先交付源码、测试和发布工作流，尚未创建 Release Tag；下文 Release 下载方式在对应版本正式发布后生效。
+
+## 功能
+
+- 查询 A、AAAA、CNAME；逐个评估所选地址族的 IP，支持指定 IP 和独立 SNI。
+- 验证 TCP 443、TLS 1.3、实际 ALPN `h2`、证书链、DNS SAN、有效期及 X25519。
+- 使用 HTTPS HEAD 记录 HTTP 状态、协议版本和重定向，不下载响应正文、不跟随重定向。
+- 使用 Team Cymru DNS 查询 IPv4 / IPv6 的 ASN 和组织；只与用户明确提供的同地址族源 IP 比较。
+- 根据 ASN、CNAME 提示潜在 CDN / 共享边缘网络风险。没有线索时仍为 `UNKNOWN`。
+- 提供中文终端输出和版本化 JSON，适合非交互安装脚本调用。
+
+工具只评估候选站点，不执行 REALITY 鉴权握手，也不保证抗封锁、不可识别、所有内核兼容或未来持续可用。应从实际 VPS 网络重复检查。
+
+## 运行依赖
+
+Linux、Bash ≥ 4.3、OpenSSL（推荐发行版维护的 1.1.1 或更新版本）、curl、`dig`、GNU coreutils（含 `timeout`、`date`、`mktemp`）、常见 POSIX 文本工具，以及系统 CA 信任库。**仅 `--json` 模式额外需要 jq ≥ 1.6**。本项目不自动安装依赖、不要求 root。
+
+Ubuntu 24.04 / Debian 12 的依赖安装命令（由管理员按需执行）：
+
+```bash
+sudo apt-get update
+sudo apt-get install bash openssl curl dnsutils coreutils ca-certificates jq
+```
+
+Arch Linux：
+
+```bash
+sudo pacman -S --needed bash openssl curl bind coreutils ca-certificates jq
+```
+
+curl 没有 HTTP/2 支持时，仍可独立用 OpenSSL 判断 ALPN h2；HTTP 检查会如实记录 curl 实际使用的协议。OpenSSL 缺少相关能力或输出证据时，该项为 `UNKNOWN`。
+
+## 从当前源码执行
+
+```bash
+git clone https://github.com/KnowSky404/reality-target-checker.git
+cd reality-target-checker
+./reality-target-checker.sh --help
+./reality-target-checker.sh check example.com
+./reality-target-checker.sh check example.com --ipv4 --timeout 3
+./reality-target-checker.sh check example.com --ipv6
+```
+
+指定实际目标 IP 和 SNI：
+
+```bash
+./reality-target-checker.sh check example.com --ip 192.0.2.10 --sni example.com
+./reality-target-checker.sh check example.com --ip 2001:db8::10 --ipv6
+./reality-target-checker.sh check example.com --origin-ip 192.0.2.20 --json
+```
+
+`192.0.2.0/24`、`2001:db8::/32` 为文档地址；请替换为自己确认的实际地址。`--origin-ip` 不会触发出口 IP 自动发现，避免把 TUN、透明代理或上游代理出口误认为 VPS 所属网络。目标与源 IP 地址族不同则不推断 ASN 一致性。
+
+所有选项均可放在子命令或域名之后。目标和 SNI 接受 ASCII 域名（IDN 请先转 punycode），不接受 URL、路径、端口或 Shell 表达式；`--ip` 不接受括号、zone ID 或前导零 IPv4。IPv6 地址由工具规范化。
+
+## 如何解读结果
+
+| 状态 | 含义 |
+| --- | --- |
+| PASS | 本次探测已有明确符合条件的证据 |
+| WARN | 基础可用但有风险、推荐条件不满足或需要审阅 |
+| FAIL | 本次探测确认不符合该检查条件 |
+| UNKNOWN | 工具能力、网络或信息不足，不能作肯定判断 |
+
+结果分成三个维度：
+
+1. `basic_tls`：TCP 443、TLS 1.3、可信证书链、SNI 的 DNS SAN 匹配、证书有效期。
+2. `compatibility`：实际 ALPN h2 和 X25519。本工具采用这两个条件组成保守候选筛选标准，**不把它们宣称为所有 REALITY 实现、传输方式的统一协议强制要求**。
+3. `ancillary`：HTTP 行为、临近到期、ASN、同 ASN 推荐条件、CDN 线索及 DNS 参考信息。附加未知项和风险单独保留。
+
+| 退出码 | 最终状态 | 调用方处理 |
+| --- | --- | --- |
+| 0 | PASS | 所选范围的检查全部通过 |
+| 1 | FAIL | 至少一个已检测 IP 的基础或候选兼容性条件明确失败 |
+| 2 | UNKNOWN | 检测无法完成、地址集合不完整、基础指标未知，或参数/依赖错误 |
+| 3 | WARN | 所选范围的基础与兼容性通过，但附加指标存在风险或未知项 |
+
+FAIL 优先于 UNKNOWN；某一个 IP 通过不能覆盖另一个 IP 的失败。默认评估 A 和 AAAA；VPS 无 IPv6 出站时，相应结果可能为 UNKNOWN。明确只使用 IPv4 时可以指定 `--ipv4`，结论也随之限定到该地址族。指定 `--ip` 时只评价该 IP，DNS 失败不会阻止这个定向探测，但仍会记录在输出里。
+
+没有证据可以仅凭本工具的启发式规则证明“不存在 CDN”。因此 v0.1.0 的 CDN 项通常为 UNKNOWN 或 WARN，正常的合格候选也通常返回 **3**，不能把它当成“完全无风险”。
+
+示意输出（非某个真实域名的检测报告）：
+
+```text
+[PASS   ] tls13            已完成 TLS 1.3 握手并协商实际密码套件
+[PASS   ] alpn_h2          服务端实际通过 ALPN 选择 h2
+[UNKNOWN] same_asn         未提供可确认的同地址族 --origin-ip，或 ASN 查询信息不足
+[UNKNOWN] cdn              未发现已知线索；不能据此排除 CDN / 共享边缘网络
+基础 TLS: PASS | H2/X25519 兼容性: PASS | 附加指标: WARN
+最终: WARN | 地址集合完整: true | WARN: 0 | UNKNOWN: 2 | 退出码: 3
+```
+
+返回 403、405 等 HTTP 状态不代表 TLS 不可用。重定向仅记录，不自动探测另一个域名。完整判据、证据边界和参考资料见 [docs/criteria.md](docs/criteria.md)。
+
+## JSON 与脚本调用
+
+```bash
+rc=0
+./reality-target-checker.sh check example.com --json --ipv4 > result.json || rc=$?
+jq '{schema_version, target, sni, selection, summary, risks, unknowns}' result.json
+printf 'checker exit=%s\n' "$rc"
+```
+
+不要直接在 `set -e` 下忽略非零状态，也不要通过普通管道让 jq 的退出码覆盖检测器退出码。JSON 模式 stdout 只有一个 JSON 文档；诊断写入 stderr。`--help` / `--version` 是独立的信息命令，输出纯文本。
+
+结构版本为 `schema_version: "1.0"`，工具版本为 `tool_version: "0.1.0"`。完整字段、错误对象和兼容约定见 [docs/integration.md](docs/integration.md)。原因文字用于展示，程序应依据状态和固定检查 ID 判断。
+
+## 固定版本分发与安装器集成
+
+Release 将提供 `reality-target-checker.sh`、`SHA256SUMS` 和 `LICENSE`。生产集成固定 Release 版本及独立审阅的 SHA256；不要依赖持续变化的 main，也不要直接执行未经校验的远程脚本。
+
+[examples/installer-integration.sh](examples/installer-integration.sh) 会先下载并校验，再执行和解析结果。首次发布 v0.1.0 后，可将可信发布渠道核对过的摘要填入：
+
+```bash
+RTC_SHA256='<替换为已审阅的 v0.1.0 脚本的 64 位 SHA256>' \
+  bash examples/installer-integration.sh example.com 192.0.2.20
+```
+
+该示例不交互、不修改 sing-box/Xray 配置，不安装、不重启服务；退出 3 时保守停止并提示审阅。校验与接入步骤见 [docs/integration.md](docs/integration.md)。SHA256 提供完整性与固定内容校验；信任摘要的来源同样重要。
+
+## 开发与发布
+
+开发依赖：ShellCheck、shfmt、Bats ≥ 1.5、Python 3（标准库）、jq 和运行依赖。Ubuntu / Debian：
+
+```bash
+sudo apt-get install shellcheck shfmt bats python3 jq
+bash scripts/check.sh
+bash scripts/package-release.sh v0.1.0
+```
+
+检查包括 Bash 语法、ShellCheck、`shfmt -i 2 -ci`、Bats 网络 mock / 安装器测试，以及无需 root 的本地真实 OpenSSL TLS 服务测试。常规测试不访问公网、不依赖某个外部网站。临时测试证书和私钥只生成在临时目录并清理。
+
+CI 对 main push、PR 运行检查。Release 工作流仅在推送稳定 SemVer Tag（如 `v0.1.0`）且版本与脚本一致、全部检查通过后发布；不覆盖已有 Release。外部 Action 固定完整 commit SHA，只有发布 job 获得 `contents: write`。现在无需创建 Tag。
+
+## 网络与隐私边界
+
+- 仅检测指定域名和明确的定向 IP；端口固定 443，无自动域名发现或大规模扫描。
+- 最多处理 16 个去重后的目标 IP，超出时明确报告不完整。`--timeout` 为每次操作的 1..60 秒上限（默认 5），不是整次运行的总超时；详情见判据文档。
+- HTTPS 探测禁用 curl 配置文件和显式环境代理，固定连接到已解析 IP，证书按实际 SNI 验证；不会关闭 TLS 验证。OpenSSL 采用本地信任库。透明代理、TUN 和链路干预仍可能影响观察结果。
+- DNS 查询通过现有解析器。Team Cymru 查询会让解析器和该服务获知待查 IP（以及提供时的源 IP）的 DNS 编码和 ASN；其 BGP 数据并非实时权威归属或地理位置保证。
+- 不读取或上传代理私有配置、UUID、密钥；不修改系统网络、DNS、防火墙或代理配置。
+
+后续值得完善的是：更多 OpenSSL/发行版输出兼容测试、CDN 证据规则维护、可选的后量子密钥交换观测及发布资产签名。本版不把混合密钥交换或其他内核专属能力当作已经验证。
+
+MIT License。

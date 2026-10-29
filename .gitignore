@@ -1,0 +1,10 @@
+.DS_Store
+*.swp
+*.tmp
+.env
+.env.*
+!.env.example
+/dist/
+/coverage/
+__pycache__/
+*.pyc
