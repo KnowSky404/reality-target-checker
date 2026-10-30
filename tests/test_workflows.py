@@ -532,6 +532,101 @@ class AdvancedWorkflows(unittest.TestCase):
         self.assertEqual(second["candidates"][0]["measurements"][0]["observed_at"],
                          first["candidates"][0]["measurements"][0]["observed_at"])
 
+    def test_stopped_samples_remain_pending_without_reading_or_writing_state(self):
+        args = discovery.parse_args(["192.0.2.10/32", "--samples", "5"])
+        seed = {"ip": IP, "sni": SNI, "sources": ["san"]}
+        for reason in ("CANCELLED", "DEADLINE"):
+            runtime = discovery.Runtime(timeout=1, deadline=10, rate=100)
+            store = mock.Mock()
+            runtime.checkpoint = store
+            if reason == "CANCELLED":
+                runtime.cancelled.set()
+            else:
+                runtime.deadline = time.monotonic() - 1
+            try:
+                with self.subTest(reason=reason), mock.patch.object(discovery, "verify_candidate") as verify:
+                    candidate = discovery.measure_candidate(seed, args, runtime)
+                verify.assert_not_called()
+                store.get_record.assert_not_called()
+                store.put.assert_not_called()
+                self.assertFalse(candidate["eligible"])
+                self.assertEqual(len(candidate["measurements"]), 5)
+                self.assertEqual(candidate["statistics"]["completed"], 0)
+                self.assertTrue(all(value["evidence_source"] == "not_started"
+                                    and value["error"] == reason and value["report"] is None
+                                    for value in candidate["measurements"]))
+            finally:
+                runtime.close()
+
+    def test_large_stopped_queue_does_not_checkpoint_unstarted_placeholders(self):
+        records = [{"ip": str(ipaddress.IPv4Address(int(ipaddress.IPv4Address("192.0.2.1")) + index)),
+                    "sni": SNI} for index in range(128)]
+        path = self.seeds(records)
+        args = discovery.parse_args(["--seeds", path, "--samples", "5", "--concurrency", "1",
+                                     "--max-hosts", "128", "--max-candidates", "128"])
+        for reason in ("CANCELLED", "DEADLINE"):
+            runtime = discovery.Runtime(timeout=1, deadline=10, rate=100)
+            store = mock.Mock()
+            store.get_record.return_value = None
+            runtime.checkpoint = store
+
+            def stop_without_starting(seed, current_args, current_runtime):
+                if reason == "CANCELLED":
+                    current_runtime.cancelled.set()
+                else:
+                    current_runtime.deadline = time.monotonic() - 1
+                return dict(seed, eligible=False, dns_binding="UNKNOWN", report=None,
+                            error=reason, observed_at=None, evidence_source="not_started", elapsed_ms=0)
+
+            try:
+                with self.subTest(reason=reason), \
+                        mock.patch.object(discovery, "verify_candidate", side_effect=stop_without_starting) as verify, \
+                        mock.patch.object(discovery, "connect_socket") as connect:
+                    report = discovery.scan(args, runtime)
+                self.assertEqual(verify.call_count, 1)
+                connect.assert_not_called()
+                sample_reads = [call for call in store.get_record.call_args_list if call.args[0] == "sample"]
+                sample_writes = [call for call in store.put.call_args_list if call.args[0] == "sample"]
+                self.assertEqual(len(sample_reads), 1)
+                self.assertEqual(sample_writes, [])
+                self.assertEqual(len(report["candidates"]), 128)
+                self.assertTrue(all(len(candidate["measurements"]) == 5 for candidate in report["candidates"]))
+                self.assertEqual(report["summary"]["exit_code"], 2)
+                self.assertFalse(report["scan"]["complete"])
+            finally:
+                runtime.close()
+
+    def test_inflight_completed_evidence_is_saved_even_when_stop_arrives(self):
+        path = self.known(IP)
+        for reason in ("CANCELLED", "DEADLINE"):
+            checkpoint = str(self.directory / (reason.lower() + "-inflight.sqlite"))
+            argv = ["--known-ips", path, "--checkpoint", checkpoint, "--samples", "5", "--concurrency", "1"]
+
+            def complete_then_stop(seed, args, runtime):
+                value = measurement(seed)
+                if reason == "CANCELLED":
+                    runtime.cancelled.set()
+                else:
+                    runtime.deadline = time.monotonic() - 1
+                return value
+
+            with self.subTest(reason=reason):
+                first, _, first_checks = self.scan(argv, verify=complete_then_stop)
+                self.assertEqual(len(first_checks), 1)
+                self.assertFalse(first["scan"]["complete"])
+                completed = first["candidates"][0]["measurements"][0]
+                self.assertIsNotNone(completed["report"])
+                self.assertEqual(completed["evidence_source"], "live")
+                self.assertEqual(first["candidates"][0]["statistics"]["completed"], 1)
+                resumed, hosts, checks = self.scan(argv + ["--resume"])
+                self.assertEqual(hosts, [])
+                self.assertEqual(len(checks), 4)
+                saved = resumed["candidates"][0]["measurements"][0]
+                self.assertEqual(saved["evidence_source"], "checkpoint")
+                self.assertEqual(saved["observed_at"], completed["observed_at"])
+                self.assertEqual(saved["report"], completed["report"])
+                self.assertTrue(resumed["candidates"][0]["eligible"])
+
     def test_changed_manifest_cannot_resume_a_different_scope(self):
         checkpoint = str(self.directory / "checkpoint.sqlite")
         path = self.known(IP)
