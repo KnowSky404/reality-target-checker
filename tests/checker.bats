@@ -27,7 +27,7 @@ assert_check() { assert_jq ".endpoints[0].checks | any(.id == \"$1\" and .status
 @test 'help and version work without network' {
   run bash "$checker" --version
   [ "$status" -eq 0 ]
-  [ "$output" = 0.2.0 ]
+  [ "$output" = 0.3.0 ]
   run bash "$checker" --help
   [ "$status" -eq 0 ]
   [ ! -f "$MOCK_LOG" ]
@@ -39,7 +39,7 @@ assert_check() { assert_jq ".endpoints[0].checks | any(.id == \"$1\" and .status
   cp "$checker" "$standalone/reality-target-checker.sh"
   run --separate-stderr bash "$standalone/reality-target-checker.sh" discover 192.0.2.0/24 --json
   [ "$status" -eq 2 ]
-  assert_jq '.report_type=="discovery" and .tool_version=="0.2.0" and .error.code=="DEPENDENCY" and .summary.exit_code==2'
+  assert_jq '.report_type=="discovery" and .tool_version=="0.3.0" and .error.code=="DEPENDENCY" and .summary.exit_code==2'
   [[ $stderr == *'reality-target-discover.py'* ]]
   [ ! -f "$MOCK_LOG" ]
 }
@@ -59,7 +59,7 @@ assert_check() { assert_jq ".endpoints[0].checks | any(.id == \"$1\" and .status
   check --origin-ip 192.0.2.20
   [ "$status" -eq 3 ]
   [ -z "$stderr" ]
-  assert_jq '.schema_version=="1.0" and .tool_version=="0.2.0" and .summary.basic_tls=="PASS" and .summary.compatibility=="PASS" and .summary.status=="WARN" and .summary.exit_code==3 and .selection.complete and (.endpoints|length)==1'
+  assert_jq '.schema_version=="1.0" and .tool_version=="0.3.0" and .summary.basic_tls=="PASS" and .summary.compatibility=="PASS" and .summary.status=="WARN" and .summary.exit_code==3 and .selection.complete and (.endpoints|length)==1'
   assert_check cdn UNKNOWN
   assert_check same_asn PASS
   assert_check asn PASS
