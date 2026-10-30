@@ -29,6 +29,12 @@ BASIC = {"tcp443", "tls13", "cert_chain", "cert_san", "cert_validity"}
 COMPATIBILITY = {"alpn_h2", "x25519"}
 ANCILLARY = {"cert_expiry", "https_response", "http_redirect", "asn", "same_asn", "cdn"}
 STATUSES = {"PASS", "WARN", "FAIL", "UNKNOWN"}
+EXPECTED_TLS_REJECTIONS = {
+    "SSLV3_ALERT_HANDSHAKE_FAILURE", "TLSV1_UNRECOGNIZED_NAME",
+    "TLSV1_ALERT_UNRECOGNIZED_NAME", "TLSV1_ALERT_PROTOCOL_VERSION",
+    "TLSV1_ALERT_NO_APPLICATION_PROTOCOL", "TLSV13_ALERT_CERTIFICATE_REQUIRED",
+    "TLSV1_ALERT_ACCESS_DENIED", "TLSV1_ALERT_INSUFFICIENT_SECURITY",
+}
 
 
 class DiscoveryError(Exception):
@@ -375,8 +381,7 @@ def discover_host(ip, runtime):
                     result["tls"] = "CERTIFICATE" if cert else "NO_CERTIFICATE"
         except ssl.SSLError as error:
             reason = getattr(error, "reason", None) or ""
-            # OpenSSL's historical unrecognized_name reason omits "ALERT".
-            if "_ALERT_" in reason or reason == "TLSV1_UNRECOGNIZED_NAME":
+            if reason in EXPECTED_TLS_REJECTIONS:
                 result["tls"] = "NO_CERTIFICATE"
             else:
                 result["tls"] = "UNKNOWN"

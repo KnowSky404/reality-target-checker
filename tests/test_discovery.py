@@ -907,6 +907,31 @@ class LocalDiscoveryTLS(unittest.TestCase):
         self.assertTrue(report["candidates"][0]["eligible"])
         self.assertEqual(report["candidates"][0]["sources"], ["ptr"])
 
+    def test_internal_and_decode_tls_alerts_with_empty_ptr_are_unknown(self):
+        for description in (ssl.ALERT_DESCRIPTION_INTERNAL_ERROR, ssl.ALERT_DESCRIPTION_DECODE_ERROR):
+            with self.subTest(alert=description):
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.load_cert_chain(self.cert, self.key)
+                server_names = []
+
+                def reject_name(sock, name, ctx):
+                    server_names.append(name)
+                    return description
+
+                context.set_servername_callback(reject_name)
+
+                def reject_handshake(conn):
+                    with context.wrap_socket(conn, server_side=True):
+                        self.fail("server unexpectedly accepted handshake")
+
+                report = self.scan_local_peer(reject_handshake)
+                self.assertEqual(server_names, [None])
+                self.assertEqual(report["hosts"][0]["tls"], "UNKNOWN")
+                self.assertIn("TLS_HANDSHAKE", report["hosts"][0]["issues"])
+                self.assertFalse(report["scan"]["complete"])
+                self.assertEqual(report["summary"]["exit_code"], 2)
+                self.assertEqual(report["candidates"], [])
+
     def test_real_bash_checker_report_is_accepted_through_mock_network(self):
         with tempfile.TemporaryDirectory(prefix="rtc-discovery-checker-") as directory:
             mock_bin = Path(directory) / "bin"
