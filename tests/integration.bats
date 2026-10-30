@@ -20,7 +20,7 @@ EOF
   RTC_SHA256=$(sha256sum "$MOCK_DOWNLOAD_DIR/reality-target-checker.sh")
   RTC_SHA256=${RTC_SHA256%% *}
   printf '%s  reality-target-checker.sh\n' "$RTC_SHA256" >"$MOCK_DOWNLOAD_DIR/SHA256SUMS"
-  printf '%s\n' '{"schema_version":"1.0","tool_version":"0.1.0","selection":{"complete":true},"endpoints":[{}],"summary":{"exit_code":3,"status":"WARN","basic_tls":"PASS","compatibility":"PASS"}}' >"$MOCK_DOWNLOAD_DIR/result.json"
+  printf '%s\n' '{"schema_version":"1.0","tool_version":"0.2.0","selection":{"complete":true},"endpoints":[{}],"summary":{"exit_code":3,"status":"WARN","basic_tls":"PASS","compatibility":"PASS"}}' >"$MOCK_DOWNLOAD_DIR/result.json"
   export FAKE_RC=3
 }
 
@@ -29,7 +29,7 @@ EOF
   [ "$status" -eq 3 ]
   printf '%s\n' "$output" | jq -e '.summary.status=="WARN"' >/dev/null
   grep -q '^executed' "$MOCK_LOG"
-  grep -q '/releases/download/v0.1.0/reality-target-checker.sh' "$MOCK_LOG"
+  grep -q '/releases/download/v0.2.0/reality-target-checker.sh' "$MOCK_LOG"
   [[ $stderr == *'需要审阅'* ]]
 }
 
@@ -56,7 +56,7 @@ EOF
 }
 
 @test 'malformed JSON, inconsistent status and unknown schema are rejected' {
-  for payload in '{}' 'not-json' '{"schema_version":"2.0"}' '{"schema_version":"1.0","tool_version":"0.1.0","summary":{"exit_code":0,"status":"PASS"}}'; do
+  for payload in '{}' 'not-json' '{"schema_version":"2.0"}' '{"schema_version":"1.0","tool_version":"0.2.0","summary":{"exit_code":0,"status":"PASS"}}'; do
     printf '%s\n' "$payload" >"$MOCK_DOWNLOAD_DIR/result.json"
     run --separate-stderr bash "$example" example.test
     [ "$status" -eq 2 ]
@@ -65,7 +65,7 @@ EOF
 
 @test 'network-incomplete result stays incomplete' {
   export FAKE_RC=2
-  printf '%s\n' '{"schema_version":"1.0","tool_version":"0.1.0","summary":{"status":"UNKNOWN","exit_code":2}}' >"$MOCK_DOWNLOAD_DIR/result.json"
+  printf '%s\n' '{"schema_version":"1.0","tool_version":"0.2.0","summary":{"status":"UNKNOWN","exit_code":2}}' >"$MOCK_DOWNLOAD_DIR/result.json"
   run --separate-stderr bash "$example" example.test
   [ "$status" -eq 2 ]
   printf '%s\n' "$output" | jq -e '.summary.status=="UNKNOWN"' >/dev/null
@@ -73,12 +73,26 @@ EOF
 
 @test 'installer distinguishes an all-pass result from a confirmed failure' {
   export FAKE_RC=0
-  printf '%s\n' '{"schema_version":"1.0","tool_version":"0.1.0","selection":{"complete":true},"endpoints":[{}],"summary":{"exit_code":0,"status":"PASS","basic_tls":"PASS","compatibility":"PASS"}}' >"$MOCK_DOWNLOAD_DIR/result.json"
+  printf '%s\n' '{"schema_version":"1.0","tool_version":"0.2.0","selection":{"complete":true},"endpoints":[{}],"summary":{"exit_code":0,"status":"PASS","basic_tls":"PASS","compatibility":"PASS"}}' >"$MOCK_DOWNLOAD_DIR/result.json"
   run --separate-stderr bash "$example" example.test
   [ "$status" -eq 0 ]
   export FAKE_RC=1
-  printf '%s\n' '{"schema_version":"1.0","tool_version":"0.1.0","summary":{"exit_code":1,"status":"FAIL"}}' >"$MOCK_DOWNLOAD_DIR/result.json"
+  printf '%s\n' '{"schema_version":"1.0","tool_version":"0.2.0","summary":{"exit_code":1,"status":"FAIL"}}' >"$MOCK_DOWNLOAD_DIR/result.json"
   run --separate-stderr bash "$example" example.test
   [ "$status" -eq 1 ]
   printf '%s\n' "$output" | jq -e '.summary.status=="FAIL"' >/dev/null
+}
+
+@test 'release package includes and checksums the optional discovery helper' {
+  package="$BATS_TEST_TMPDIR/package"
+  mkdir -p "$package/scripts"
+  cp "$BATS_TEST_DIRNAME/../scripts/package-release.sh" "$package/scripts/"
+  cp "$BATS_TEST_DIRNAME/../reality-target-checker.sh" "$package/"
+  cp "$BATS_TEST_DIRNAME/../reality-target-discover.py" "$package/"
+  cp "$BATS_TEST_DIRNAME/../LICENSE" "$package/"
+  run --separate-stderr bash "$package/scripts/package-release.sh" v0.2.0
+  [ "$status" -eq 0 ]
+  [ -f "$package/dist/reality-target-discover.py" ]
+  grep -Eq '^[a-f0-9]{64}  reality-target-discover\.py$' "$package/dist/SHA256SUMS"
+  cmp "$package/reality-target-discover.py" "$package/dist/reality-target-discover.py"
 }

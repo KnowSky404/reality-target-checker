@@ -2,14 +2,14 @@
 
 ## 版本和资产
 
-生产环境固定 `v0.1.0` 这样的稳定 SemVer Tag，同时固定该版本脚本的可信 SHA256。Release 提供脚本、`SHA256SUMS` 和 MIT `LICENSE`。当前尚未推送 v0.1.0 Tag，下载地址在正式发布后才有效；开发时先从本地仓库运行。
+生产环境固定 `v0.2.0` 这样的稳定 SemVer Tag，同时固定该版本脚本的可信 SHA256。Release 提供 Bash 检查器、可选的 `reality-target-discover.py`、两者的 `SHA256SUMS` 和 MIT `LICENSE`。本次不创建 Tag，下载地址在对应版本正式发布后才有效；开发时先从本地仓库运行。
 
 不要直接执行未经校验的远程脚本，不要把 main 分支当作生产入口。只把同次下载的脚本与同次下载的摘要比较，不能在发布渠道被替换时提供独立保护；应在审阅版本时从可信渠道确认摘要，写入安装器或其受控配置。SHA256 本身不是发布者签名。
 
 正式发布后手工下载、先校验再执行的步骤如下（在空目录操作）：
 
 ```bash
-version=v0.1.0
+version=v0.2.0
 base="https://github.com/KnowSky404/reality-target-checker/releases/download/$version"
 curl --disable -fL --proto '=https' --proto-redir '=https' --max-time 60 \
   -o reality-target-checker.sh "$base/reality-target-checker.sh"
@@ -31,14 +31,16 @@ RTC_SHA256='<替换为可信的固定版本脚本 SHA256>' \
 
 最后的 IP 应为用户确认的 VPS 公网 IP；可省略，此时同 ASN 判断为 UNKNOWN。示例仅输出检测 JSON 和决策提示，不自动写入现有 sing-box 配置，不安装、停止或重启服务，也不更改 DNS、路由、TUN、代理或防火墙。
 
-## JSON 1.0 契约
+仅调用 `check` 的安装器继续只下载 Bash；发布清单新增 Python 文件不会改变上述脚本摘要的匹配规则。调用 `discover` 时，应额外下载同版本的 `reality-target-discover.py`，独立固定和校验其可信 SHA256，再放到 Bash 同一目录。不得仅校验 Bash 而直接执行未经校验的 Python 文件。发现模式额外需要 Python >= 3.9，始终需要 jq。
+
+## check JSON 1.0 契约
 
 成功产生检测报告时始终包含下列字段：
 
 | 字段 | 约定 |
 | --- | --- |
 | schema_version | 字符串 `"1.0"`，结构版本，独立于工具版本 |
-| tool_version | 字符串，例如 `"0.1.0"` |
+| tool_version | 字符串，例如 `"0.2.0"` |
 | target / sni / port | 规范化域名、实际 TLS SNI、固定端口 443 |
 | timeout_seconds / tools | 每次操作上限、OpenSSL/curl 版本信息 |
 | origin | 用户指定 IP、单一 ASN（十进制字符串或 null）、组织和 `user_supplied_only` 来源标记 |
@@ -56,7 +58,7 @@ RTC_SHA256='<替换为可信的固定版本脚本 SHA256>' \
 参数、依赖、临时目录等启动错误返回 2，JSON 模式会输出错误 envelope：
 
 ```json
-{"schema_version":"1.0","tool_version":"0.1.0","target":null,"sni":null,"error":{"code":"USAGE","message":"..."},"summary":{"status":"UNKNOWN","exit_code":2}}
+{"schema_version":"1.0","tool_version":"0.2.0","target":null,"sni":null,"error":{"code":"USAGE","message":"..."},"summary":{"status":"UNKNOWN","exit_code":2}}
 ```
 
 错误报告没有 endpoints/dns 等完整报告字段。缺少 jq 时也会输出静态合法 JSON，错误代码为 DEPENDENCY。诊断文字始终进入 stderr。进程被信号中断、系统终止或文件系统写入失败时可能没有完整报告，调用方必须检查 JSON 和退出码。
@@ -86,8 +88,34 @@ esac
 
 整次调用若需要上限，可在安装器外层使用 GNU `timeout`。外层 124/137 或信号 130/143 一律当作无法完成，而不是可用；报告文件也可能不完整。网络异常不能触发自动接受默认域名。
 
+## discover JSON 1.0 契约
+
+`discover` 使用独立报告类型，顶层有 `report_type: "discovery"`、`schema_version: "1.0"` 和工具版本。不要把它作为上面的单域名 check 报告解析，也不要把发现任务退出码直接套用到单个候选。
+
+| 字段 | 约定 |
+| --- | --- |
+| scope | 明确的 IPv4 CIDR、主机数、预算及可选的用户源 IP |
+| scan | 本次策略执行是否完整、完成数量、耗时、停止或截断原因；不代表域名发现全集完整 |
+| hosts | 每 IP 的 TCP、无 SNI TLS 和 PTR 发现证据、域名来源及有限通配线索 |
+| candidates | 去重 IP/SNI 对、sources、eligible、dns_binding、复核耗时，以及原 check 报告或复核错误 |
+| summary | 发现任务状态及退出码 |
+
+`eligible=true` 需要实际基础 TLS 和候选兼容性均通过，原 check 可返回 WARN/3；其 `risks` 和 `unknowns` 仍应逐项审阅。单个 FAIL 候选不会取消其他合格候选。`dns_binding` 为 MATCH、DIFFERENT 或 UNKNOWN，独立表达本次域名 A 查询与固定 IP 的关系；定向 IP 验证通过不保证以域名作为 target 时仍连到同一地址。
+
+发现退出码：0 为完整且有无附加风险的合格候选；3 为完整且存在带风险的合格候选；1 为完整且没有合格候选、没有待确认复核；2 为参数/依赖问题、执行不完整或存在 UNKNOWN 复核。总超时和候选截断不能报告为完整无结果；即使退出 2，已确认候选仍会保留。130/143 为中断，调用方必须保守处理。完整参数、资源边界和验收见 [SPEC](SPEC-discovery.md)。
+
+```bash
+rc=0
+bash ./reality-target-checker.sh discover 192.0.2.0/24 --json > discovery.json || rc=$?
+jq -e '.report_type == "discovery" and .schema_version == "1.0"' discovery.json >/dev/null || exit 2
+jq '.candidates[] | select(.eligible) | {ip, sni, sources, dns_binding, report}' discovery.json
+printf 'discovery exit=%s\n' "$rc"
+```
+
+示例地址需替换为明确选择的实际范围；此示例仅展示候选，不自动接受风险或修改代理配置。`--rate` 是发现/复核任务的共享启动频率，一个复核包含多个网络操作；总时间由 `--deadline` 限制。ASN 自动展开和 IPv6 发现尚未实现。
+
 ## 维护和发布
 
-修改脚本的 VERSION，保持文档和固定版本示例一致，运行 `bash scripts/check.sh`；`bash scripts/package-release.sh v0.1.0` 可在本地生成并校验 dist 资产。正式决定发布后推送相同版本的稳定 Tag。Release 工作流会重新执行全部测试，校验 Tag 与脚本版本，再用最小写入权限发布资产；不会强制推送或覆盖 Release。发布者应避免移动已发布 Tag 或替换相同版本资产。
+修改脚本的 VERSION，保持文档和固定版本示例一致，运行 `bash scripts/check.sh`；`bash scripts/package-release.sh v0.2.0` 可在本地生成并校验 dist 资产。正式决定发布后推送相同版本的稳定 Tag。Release 工作流会重新执行全部测试，校验 Tag 与脚本版本，再用最小写入权限发布资产；不会强制推送或覆盖 Release。发布者应避免移动已发布 Tag 或替换相同版本资产。
 
 需要升级的安装器应同时审阅新版本、变更的 JSON 契约、固定版本 URL 和新摘要，再更新自身固定值。后续可以增加签名/来源证明；当前不宣称已提供这类保证。

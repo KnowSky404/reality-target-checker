@@ -46,6 +46,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           bash scripts/package-release.sh "$RELEASE_TAG"
-          printf 'Standalone Bash checker and SHA256SUMS. See docs/integration.md at this tag.\nCommit: %s\n' "$GITHUB_SHA" > dist/NOTES.md
-          gh release create "$RELEASE_TAG" dist/reality-target-checker.sh dist/SHA256SUMS dist/LICENSE \
+          printf 'Standalone Bash checker, optional Python IPv4 discovery helper, and SHA256SUMS. See docs/integration.md at this tag.\nCommit: %s\n' "$GITHUB_SHA" > dist/NOTES.md
+          gh release create "$RELEASE_TAG" dist/reality-target-checker.sh dist/reality-target-discover.py dist/SHA256SUMS dist/LICENSE \
             --verify-tag --title "$RELEASE_TAG" --notes-file dist/NOTES.md
