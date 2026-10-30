@@ -106,6 +106,30 @@ class AdvancedWorkflows(unittest.TestCase):
                 with self.assertRaises((SystemExit, ValueError)):
                     discovery.parse_args(argv)
 
+    def test_explicit_empty_source_or_state_arguments_are_usage_errors_without_side_effects(self):
+        manifest = self.known(IP)
+        sources = discovery.module("sources")
+        cases = [["192.0.2.0/24", option, ""] for option in (
+            "--known-ips", "--seeds", "--asn", "--cache-dir", "--checkpoint", "--kernel-bin")]
+        cases.append(["", "--known-ips", manifest])
+        original_files = set(self.directory.rglob("*"))
+        for argv in cases:
+            output = io.StringIO()
+            with self.subTest(argv=argv), \
+                    mock.patch.object(discovery, "connect_socket", side_effect=AssertionError("unexpected target probe")) as connect, \
+                    mock.patch.object(discovery.Runtime, "run", side_effect=AssertionError("unexpected network command")) as run, \
+                    mock.patch.object(sources, "build_asn_plan", side_effect=AssertionError("unexpected ASN request")) as provider, \
+                    redirect_stdout(output), redirect_stderr(io.StringIO()):
+                code = discovery.main([*argv, "--json"])
+            self.assertEqual(code, 2)
+            report = json.loads(output.getvalue())
+            self.assertEqual(report["error"]["code"], "USAGE")
+            self.assertEqual(report["summary"]["status"], "UNKNOWN")
+            connect.assert_not_called()
+            run.assert_not_called()
+            provider.assert_not_called()
+            self.assertEqual(set(self.directory.rglob("*")), original_files)
+
     def test_asn_without_explicit_selection_is_only_a_plan(self):
         report, hosts, checks = self.scan(["--asn", "AS64500"], plan=asn_plan())
         self.assertEqual(report["report_type"], "discovery_plan")
