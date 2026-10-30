@@ -919,6 +919,9 @@ def parse_args(argv):
         parser.add_argument("--" + name, type=_integer(low, high), default=default,
                             help=description + "（默认 %(default)s）")
     args = parser.parse_args(argv)
+    for name in ("known_ips", "seeds", "cache_dir", "checkpoint", "kernel_bin"):
+        if getattr(args, name) == "":
+            parser.error("--" + name.replace("_", "-") + " 需要非空路径")
     if len(args.include_cidr) > 4096:
         parser.error("--include-cidr 最多 4096 个范围")
     def network(value):
@@ -930,13 +933,13 @@ def parse_args(argv):
             raise ValueError
         return ipaddress.ip_network(value, strict=True)
     try:
-        args.cidr = network(args.cidr) if args.cidr else None
+        args.cidr = network(args.cidr) if args.cidr is not None else None
         args.include_cidr = list(dict.fromkeys(network(value) for value in args.include_cidr))
         if args.origin_ip is not None:
             args.origin_ip = canonical_ip(args.origin_ip)
         if args.asn_from_ip is not None:
             args.asn_from_ip = canonical_ip(args.asn_from_ip)
-        if args.asn:
+        if args.asn is not None:
             match = re.fullmatch(r"(?:AS)?([1-9][0-9]{0,9})", args.asn.upper())
             if not match or int(match[1]) > 4294967295:
                 raise ValueError
