@@ -706,6 +706,7 @@ def host_task(ip, names, args, runtime):
     cache = getattr(runtime, "cache", None)
     result = None
     try:
+        runtime.check()
         if names:
             result = {"ip": ip, "tcp": "UNKNOWN", "tls": "NOT_ATTEMPTED", "ptr": "NOT_ATTEMPTED",
                       "names": names, "wildcards": [], "issues": [], "completed": True,
@@ -780,6 +781,7 @@ def measure_candidate(seed, args, runtime):
         key = json.dumps([seed["ip"], seed["sni"], index], separators=(",", ":"))
         value = None
         try:
+            runtime.check()
             saved = _state_get(checkpoint, "sample", key)
             value = _restored_measurement(saved, seed, args) if saved else None
             if value is None:
@@ -791,7 +793,8 @@ def measure_candidate(seed, args, runtime):
                         runtime.check()
                         runtime.cancelled.wait(min(0.05, end - time.monotonic()))
                 value = verify_candidate(seed, args, runtime)
-                _state_put(checkpoint, "sample", key, value)
+                if value.get("evidence_source") != "not_started":
+                    _state_put(checkpoint, "sample", key, value)
         except DiscoveryError as error:
             if value is not None:
                 value = dict(value, eligible=False, error=str(error))
