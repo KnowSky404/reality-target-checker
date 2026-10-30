@@ -124,7 +124,7 @@ RTC_SHA256='<替换为已审阅的 v0.1.0 脚本的 64 位 SHA256>' \
 
 ## 开发与发布
 
-所有变更必须在独立 worktree 中开发，每次推送或提交 PR 前先完成本地 `/review` 并解决问题；PR 经 Codex 机器人 review 且所需检查通过后，使用 Rebase and merge 合并并清理任务分支与 worktree。完整约束见 [AGENTS.md](AGENTS.md)。
+所有变更必须在独立 worktree 中开发；每次推送或创建、更新 PR 前，先验证并完成本地 `/review`、解决问题，且最终提交后须再次审查整个任务分支。推送分支并创建 PR 后，等待当前 HEAD 的 Codex 机器人 review 完成且问题已处理、所需 CI 与审批通过，再使用 Rebase and merge 合并；确认合并后清理任务远程/本地分支及 worktree。审查不可用或结果不明确时保留 PR 和分支并报告阻塞。完整约束与记录要求见 [AGENTS.md](AGENTS.md) 和 [PR 模板](.github/pull_request_template.md)。
 
 开发依赖：ShellCheck、shfmt、Bats ≥ 1.5、Python 3（标准库）、jq 和运行依赖。Ubuntu / Debian：
 
