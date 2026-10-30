@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -781,11 +782,10 @@ class RealIPv6Workflow(unittest.TestCase):
         server.start()
         original_socket = socket.socket
         case = self
-        families = []
+        outbound_families = []
 
         class RedirectedSocket:
             def __init__(self, family, *args, **kwargs):
-                families.append(family)
                 self.socket = original_socket(family, *args, **kwargs)
 
             def __getattr__(self, name):
@@ -798,6 +798,8 @@ class RealIPv6Workflow(unittest.TestCase):
                 self.socket.close()
 
             def connect_ex(self, address):
+                outbound_families.append(self.socket.family)
+                case.assertEqual(self.socket.family, socket.AF_INET6)
                 case.assertEqual(address, (IP6, 443))
                 return self.socket.connect_ex(("::1", port))
 
@@ -809,11 +811,13 @@ class RealIPv6Workflow(unittest.TestCase):
                 return 0, baseline.ptr_answer(IP6, SNI + ".").encode(), b""
             return real_run(command, input_data=input_data, timeout=timeout)
 
+        client_socket = SimpleNamespace(**vars(socket))
+        client_socket.socket = RedirectedSocket
         try:
-            with mock.patch.object(socket, "socket", side_effect=RedirectedSocket), \
+            with mock.patch.object(discovery, "socket", client_socket), \
                     mock.patch.object(runtime, "run", side_effect=run):
                 host = discovery.discover_host(IP6, runtime)
-            self.assertEqual(families, [socket.AF_INET6])
+            self.assertEqual(outbound_families, [socket.AF_INET6])
             self.assertEqual(host["ip"], IP6)
             self.assertEqual(host["tcp"], "OPEN")
             self.assertEqual(host["tls"], "CERTIFICATE")
