@@ -27,9 +27,31 @@ assert_check() { assert_jq ".endpoints[0].checks | any(.id == \"$1\" and .status
 @test 'help and version work without network' {
   run bash "$checker" --version
   [ "$status" -eq 0 ]
-  [ "$output" = 0.1.0 ]
+  [ "$output" = 0.2.0 ]
   run bash "$checker" --help
   [ "$status" -eq 0 ]
+  [ ! -f "$MOCK_LOG" ]
+}
+
+@test 'standalone Bash check reports a missing optional discovery helper as discovery JSON' {
+  standalone="$BATS_TEST_TMPDIR/standalone"
+  mkdir "$standalone"
+  cp "$checker" "$standalone/reality-target-checker.sh"
+  run --separate-stderr bash "$standalone/reality-target-checker.sh" discover 192.0.2.0/24 --json
+  [ "$status" -eq 2 ]
+  assert_jq '.report_type=="discovery" and .tool_version=="0.2.0" and .error.code=="DEPENDENCY" and .summary.exit_code==2'
+  [[ $stderr == *'reality-target-discover.py'* ]]
+  [ ! -f "$MOCK_LOG" ]
+}
+
+@test 'discovery without Python produces dependency JSON before any network operation' {
+  isolated="$BATS_TEST_TMPDIR/no-python"
+  mkdir "$isolated"
+  ln -s "$(command -v dirname)" "$isolated/dirname"
+  run --separate-stderr env PATH="$isolated" /bin/bash "$checker" discover 192.0.2.0/24 --json
+  [ "$status" -eq 2 ]
+  assert_jq '.report_type=="discovery" and .error.code=="DEPENDENCY" and .summary.status=="UNKNOWN"'
+  [[ $stderr == *'Python >= 3.9'* ]]
   [ ! -f "$MOCK_LOG" ]
 }
 
@@ -37,7 +59,7 @@ assert_check() { assert_jq ".endpoints[0].checks | any(.id == \"$1\" and .status
   check --origin-ip 192.0.2.20
   [ "$status" -eq 3 ]
   [ -z "$stderr" ]
-  assert_jq '.schema_version=="1.0" and .tool_version=="0.1.0" and .summary.basic_tls=="PASS" and .summary.compatibility=="PASS" and .summary.status=="WARN" and .summary.exit_code==3 and .selection.complete and (.endpoints|length)==1'
+  assert_jq '.schema_version=="1.0" and .tool_version=="0.2.0" and .summary.basic_tls=="PASS" and .summary.compatibility=="PASS" and .summary.status=="WARN" and .summary.exit_code==3 and .selection.complete and (.endpoints|length)==1'
   assert_check cdn UNKNOWN
   assert_check same_asn PASS
   assert_check asn PASS
@@ -317,10 +339,12 @@ assert_check() { assert_jq ".endpoints[0].checks | any(.id == \"$1\" and .status
 
 @test 'hostile domain, IP, SNI, timeout and conflicting family fail before networking' {
   # shellcheck disable=SC2016 # Intentionally pass hostile input literally.
-  for value in 'https://example.test' 'example.test:443' '-example.test' 'a..test' 'example.test..' 'a/../test' 'x$(touch /tmp/rtc-injected).test'; do
+  for value in 'https://example.test' 'example.test:443' '-example.test' 'a..test' 'example.test..' 'a/../test' 'x$(touch /tmp/rtc-injected).test' \
+    '0x7f000001' '0X7F000001' '0x7f.1' '127.0.0.0x1' '0x7f.0.0.1'; do
     run --separate-stderr bash "$checker" check "$value" --json
     [ "$status" -eq 2 ]
     assert_jq '.error.code=="USAGE"'
+    [ ! -f "$MOCK_LOG" ]
   done
   for value in '01.2.3.4' '256.0.0.1' '1:2:3' '1:::2' 'fe80::1%eth0' '1.2.3.4;id'; do
     check --ip "$value"
@@ -331,8 +355,14 @@ assert_check() { assert_jq ".endpoints[0].checks | any(.id == \"$1\" and .status
   [ "$status" -eq 2 ]
   check --timeout 1.5
   [ "$status" -eq 2 ]
-  check --sni 'x;id'
-  [ "$status" -eq 2 ]
+  for value in 'x;id' '0x7f000001' '0X7F000001' '0x7f.1' '127.0.0.0x1' '0x7f.0.0.1'; do
+    check --sni "$value"
+    [ "$status" -eq 2 ]
+    assert_jq '.error.code=="USAGE"'
+    [ ! -f "$MOCK_LOG" ]
+  done
+  run bash -c 'source "$1"; valid_domain "$2"' _ "$checker" '0xface.example.test'
+  [ "$status" -eq 0 ]
   check --ipv6
   [ "$status" -eq 2 ]
   [ ! -f "$MOCK_LOG" ]

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Standalone, read-only candidate assessment. No proxy core is required.
 
-VERSION=0.1.0
+VERSION=0.2.0
 SCHEMA_VERSION=1.0
 MAX_ENDPOINTS=16
 
@@ -11,8 +11,10 @@ usage() {
 reality-target-checker — REALITY 候选握手目标评估器
 
 用法: reality-target-checker.sh check DOMAIN [选项]
+      reality-target-checker.sh discover CIDR [选项]
       reality-target-checker.sh --help | --version
 
+check 选项：
   --json             仅向 stdout 输出 JSON（需要 jq）
   --timeout SECONDS  每次网络操作的超时，整数 1..60，默认 5
   --origin-ip IP     用户确认的 VPS 公网 IP（不自动探测出口 IP）
@@ -25,6 +27,10 @@ reality-target-checker — REALITY 候选握手目标评估器
 端口固定为 443。最多检查 16 个去重后的地址，超出时明确报告不完整。
 退出码: 0 检查通过；1 候选基础条件失败；2 无法完成；
         3 基础通过但有 WARN / UNKNOWN 附加指标，必须审阅。
+
+discover 在指定 IPv4 网段发现候选并固定 IP/SNI 复核，需要 Python >= 3.9、
+jq 和相邻的 reality-target-discover.py。discover 必须为第一个参数。
+发现任务选项、预算和退出码见 reality-target-checker.sh discover --help。
 EOF
 }
 
@@ -38,10 +44,31 @@ fatal() {
         '{schema_version:$schema,tool_version:$version,target:null,sni:null,
           error:{code:$code,message:$message},summary:{status:"UNKNOWN",exit_code:2}}'
     else
-      printf '%s\n' '{"schema_version":"1.0","tool_version":"0.1.0","target":null,"sni":null,"error":{"code":"DEPENDENCY","message":"JSON mode requires jq"},"summary":{"status":"UNKNOWN","exit_code":2}}'
+      printf '%s\n' '{"schema_version":"1.0","tool_version":"0.2.0","target":null,"sni":null,"error":{"code":"DEPENDENCY","message":"JSON mode requires jq"},"summary":{"status":"UNKNOWN","exit_code":2}}'
     fi
   fi
   exit 2
+}
+
+dispatch_discover() {
+  local script_dir discovery_script message=''
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || return 2
+  discovery_script=$script_dir/reality-target-discover.py
+  if ! command -v python3 >/dev/null 2>&1; then
+    message='discover 需要 Python >= 3.9'
+  elif ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))'; then
+    message='discover 需要可运行的 Python >= 3.9'
+  elif [[ ! -r $discovery_script ]]; then
+    message='discover 需要相邻的 reality-target-discover.py；请下载并校验同版本资产'
+  fi
+  if [[ -n $message ]]; then
+    printf 'reality-target-checker: %s\n' "$message" >&2
+    if ((json)); then
+      printf '{"schema_version":"%s","tool_version":"%s","report_type":"discovery","error":{"code":"DEPENDENCY","message":"Discovery requires Python >= 3.9 and the adjacent reality-target-discover.py"},"summary":{"status":"UNKNOWN","exit_code":2}}\n' "$SCHEMA_VERSION" "$VERSION"
+    fi
+    return 2
+  fi
+  exec python3 "$discovery_script" "$@"
 }
 
 valid_domain() {
@@ -49,6 +76,8 @@ valid_domain() {
   local -a labels
   [[ -n $name && ${#name} -le 253 && $name != *. && $name != *..* && $name != *[!a-zA-Z0-9.-]* ]] || return 1
   [[ ! $name =~ ^[0-9.]+$ ]] || return 1
+  # Reject numeric URL hosts that curl can reinterpret instead of using --resolve.
+  [[ ! $name =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)(\.(0[xX][0-9a-fA-F]+|[0-9]+)){0,3}$ ]] || return 1
   IFS=. read -r -a labels <<<"$name"
   for label in "${labels[@]}"; do
     [[ ${#label} -le 63 && $label =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] || return 1
@@ -579,6 +608,11 @@ main() {
   # Detect JSON before validation so invalid invocations still produce JSON.
   for arg in "$@"; do [[ $arg != --json ]] || json=1; done
   ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3))) || fatal DEPENDENCY '需要 Bash 4.3 或更新版本'
+  if [[ ${1:-} == discover ]]; then
+    shift
+    dispatch_discover "$@"
+    return $?
+  fi
   while (($#)); do
     case $1 in
       --help | -h)
