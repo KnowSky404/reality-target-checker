@@ -80,9 +80,12 @@ def _timestamp(value):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             result = float(value)
         elif isinstance(value, str):
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            # RIPE and Shodan commonly use ISO UTC without an explicit suffix.
-            result = parsed.replace(tzinfo=timezone.utc).timestamp() if parsed.tzinfo is None else parsed.timestamp()
+            if re.fullmatch(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?", value):
+                result = float(value)
+            else:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                # RIPE and Shodan commonly use ISO UTC without an explicit suffix.
+                result = parsed.replace(tzinfo=timezone.utc).timestamp() if parsed.tzinfo is None else parsed.timestamp()
         else:
             raise ValueError
         if not math.isfinite(result) or result < 0:

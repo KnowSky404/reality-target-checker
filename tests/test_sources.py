@@ -138,6 +138,43 @@ class ImportedSeeds(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(sources.SourceError):
                 self.load(text, filename="seeds.csv")
 
+    def test_csv_epoch_observations_match_equivalent_json_records(self):
+        for format, fields in (
+                ("generic", {"ip": IP, "sni": "example.test", "observed_at": None}),
+                ("dns", {"rrname": "example.test", "rrtype": "A", "rdata": IP, "time_last": None})):
+            for epoch_text in ("0", str(int(NOW - 300)), str(NOW - 299.5), "1.7933181e9", "1E+3", "1e-3"):
+                with self.subTest(format=format, epoch=epoch_text):
+                    epoch = json.loads(epoch_text)
+                    record = dict(fields)
+                    time_field = next(reversed(record))
+                    record[time_field] = epoch
+                    expected = self.load(record, format=format)
+                    record[time_field] = epoch_text
+                    text = ",".join(record) + "\n" + ",".join(str(value) for value in record.values()) + "\n"
+                    self.assertEqual(self.load(text, format=format, filename="seeds.csv"), expected)
+                    self.assertEqual(expected[0]["observed_at"], sources._utc(epoch))
+
+    def test_epoch_strings_require_finite_json_number_values(self):
+        for value in ("0", "-0", "0.5", "1e3", "1E+3", "1e-3", str(int(NOW - 300)), str(NOW - 299.5)):
+            with self.subTest(value=value):
+                self.assertEqual(sources._timestamp(value), float(value))
+        for value in (True, False, None, [], {}, -1, float("nan"), float("inf"), float("-inf"),
+                      "NaN", "Infinity", "-Infinity", "1e309", "9" * 1000,
+                      "+1793318100", "01793318100", "1793318100 ", " 1793318100",
+                      "1_793_318_100", "0x6ae4a4d4", "01e3", "1e", "1.e3", "1e+", "-1", ".5", "1."):
+            with self.subTest(value=value), self.assertRaisesRegex(sources.SourceError, "^SOURCE_TIME$"):
+                sources._timestamp(value)
+
+    def test_csv_epoch_observations_keep_future_and_invalid_time_rejection(self):
+        for format, prefix in (
+                ("generic", "ip,sni,observed_at\n192.0.2.10,example.test,"),
+                ("dns", "rrname,rrtype,rdata,time_last\nexample.test,A,192.0.2.10,")):
+            with self.subTest(format=format), self.assertRaisesRegex(sources.SourceError, "^SEED_FUTURE_TIME$"):
+                self.load(prefix + str(int(NOW + 3600)) + "\n", format=format, filename="seeds.csv")
+            for value in ("NaN", "Infinity", "True", "-1", "+1793318100", "01793318100"):
+                with self.subTest(format=format, value=value), self.assertRaisesRegex(sources.SourceError, "^SOURCE_TIME$"):
+                    self.load(prefix + value + "\n", format=format, filename="seeds.csv")
+
     def test_conflicting_or_numeric_names_are_rejected_not_silently_dropped(self):
         for record in (
                 {"ip": IP, "sni": "a.test", "domain": "b.test"},
