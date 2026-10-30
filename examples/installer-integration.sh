@@ -3,7 +3,7 @@
 # Copy this example into your installer and pin BOTH version and trusted digest.
 set -euo pipefail
 
-readonly version=v0.2.0
+readonly version=v0.3.0
 readonly repository=KnowSky404/reality-target-checker
 readonly asset=reality-target-checker.sh
 

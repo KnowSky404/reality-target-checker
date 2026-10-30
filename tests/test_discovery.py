@@ -127,7 +127,7 @@ class ArgumentsAndNames(unittest.TestCase):
             ["192.0.2.0/24", "--timeout", "0"],
             ["192.0.2.0/24", "--deadline", "3601"],
             ["192.0.2.0/24", "--max-candidates", "0"],
-            ["192.0.2.0/24", "--origin-ip", "::1"],
+            ["192.0.2.0/24", "--origin-ip", "::1%lo"],
             ["192.0.2.0/24", "--origin-ip", "192.0.02.1"],
         ]
         for argv in cases:

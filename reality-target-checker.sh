@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Standalone, read-only candidate assessment. No proxy core is required.
 
-VERSION=0.2.0
+VERSION=0.3.0
 SCHEMA_VERSION=1.0
 MAX_ENDPOINTS=16
 
@@ -11,7 +11,7 @@ usage() {
 reality-target-checker — REALITY 候选握手目标评估器
 
 用法: reality-target-checker.sh check DOMAIN [选项]
-      reality-target-checker.sh discover CIDR [选项]
+      reality-target-checker.sh discover [CIDR] [选项]
       reality-target-checker.sh --help | --version
 
 check 选项：
@@ -28,8 +28,11 @@ check 选项：
 退出码: 0 检查通过；1 候选基础条件失败；2 无法完成；
         3 基础通过但有 WARN / UNKNOWN 附加指标，必须审阅。
 
-discover 在指定 IPv4 网段发现候选并固定 IP/SNI 复核，需要 Python >= 3.9、
-jq 和相邻的 reality-target-discover.py。discover 必须为第一个参数。
+discover 支持 IPv4 网段、ASN 范围计划及已知 IPv4/IPv6 清单，固定 IP/SNI 复核。
+需要 Python >= 3.9、jq 和相邻的 reality-target-discover.py；ASN/导入、
+缓存/续扫、可选 Xray 自检分别使用同版本 sources/state/kernel Python 模块。
+ASN 默认只生成计划；主动扫描须明确选择网段或提供清单，不枚举 IPv6 前缀。
+支持 --seeds、--samples、--checkpoint/--resume；discover 必须为第一个参数。
 发现任务选项、预算和退出码见 reality-target-checker.sh discover --help。
 EOF
 }
@@ -44,7 +47,7 @@ fatal() {
         '{schema_version:$schema,tool_version:$version,target:null,sni:null,
           error:{code:$code,message:$message},summary:{status:"UNKNOWN",exit_code:2}}'
     else
-      printf '%s\n' '{"schema_version":"1.0","tool_version":"0.2.0","target":null,"sni":null,"error":{"code":"DEPENDENCY","message":"JSON mode requires jq"},"summary":{"status":"UNKNOWN","exit_code":2}}'
+      printf '%s\n' '{"schema_version":"1.0","tool_version":"0.3.0","target":null,"sni":null,"error":{"code":"DEPENDENCY","message":"JSON mode requires jq"},"summary":{"status":"UNKNOWN","exit_code":2}}'
     fi
   fi
   exit 2
